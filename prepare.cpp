@@ -1,8 +1,72 @@
 #include <iostream>
 #include <vector>
-#include <opencv2/opencv.hpp>
-#include <opencv2/core/mat.hpp>
+#include <math.h>
+#include "opencv2/core.hpp"
+#include "opencv2/imgproc.hpp"
+#include "opencv2/highgui.hpp"
 using namespace std;
+
+constexpr double PI = 3.1415926535897932384626433832795;
+
+void drawAxis(cv::Mat& img, cv::Point p, cv::Point q, cv::Scalar colour, const float scale)
+{
+    double angle = atan2( (double) p.y - q.y, (double) p.x - q.x ); // angle in radians
+    double hypotenuse = sqrt( (double) (p.y - q.y) * (p.y - q.y) + (p.x - q.x) * (p.x - q.x));
+    // Here we lengthen the arrow by a factor of scale
+    q.x = (int) (p.x - scale * hypotenuse * cos(angle));
+    q.y = (int) (p.y - scale * hypotenuse * sin(angle));
+    cv::line(img, p, q, colour, 1, cv::LINE_AA);
+
+    // // create the arrow hooks
+    // p.x = (int) (q.x + 9 * cos(angle + PI / 4));
+    // p.y = (int) (q.y + 9 * sin(angle + PI / 4));
+    // cv::line(img, p, q, colour, 1, cv::LINE_AA);
+    
+    // p.x = (int) (q.x + 9 * cos(angle - PI / 4));
+    // p.y = (int) (q.y + 9 * sin(angle - PI / 4));
+    // cv::line(img, p, q, colour, 1, cv::LINE_AA);
+}
+
+double getOrientation(const std::vector<cv::Point> &pts, cv::Mat &img)
+{
+    //Construct a buffer used by the pca analysis
+    int sz = static_cast<int>(pts.size());
+    cv::Mat data_pts = cv::Mat(sz, 2, CV_64F);
+    for (int i = 0; i < data_pts.rows; i++)
+    {
+        data_pts.at<double>(i, 0) = pts[i].x;
+        data_pts.at<double>(i, 1) = pts[i].y;
+    }
+    //Perform PCA analysis
+    cv::PCA pca_analysis(data_pts, cv::Mat(), cv::PCA::DATA_AS_ROW);
+
+    //Store the center of the object
+    cv::Point cntr = cv::Point(static_cast<int>(pca_analysis.mean.at<double>(0, 0)),
+    static_cast<int>(pca_analysis.mean.at<double>(0, 1)));
+
+    //Store the eigenvalues and eigenvectors
+    std::vector<cv::Point2d> eigen_vecs(2);
+    std::vector<double> eigen_val(2);
+    for (int i = 0; i < 2; i++)
+    {
+    eigen_vecs[i] = cv::Point2d(pca_analysis.eigenvectors.at<double>(i, 0),
+                    pca_analysis.eigenvectors.at<double>(i, 1));
+
+    eigen_val[i] = pca_analysis.eigenvalues.at<double>(i);
+    std::cout << "eigenval " << i << ": " << eigen_val[i] << std::endl;
+    std::cout << "eigenvec " << i << ": " << eigen_vecs[i] << std::endl;
+
+    }
+    // Draw the principal components
+    cv::circle(img, cntr, 3, cv::Scalar(255, 0, 255), 2);
+    cv::Point p1 = cntr + 0.02 * cv::Point(static_cast<int>(eigen_vecs[0].x * eigen_val[0]), static_cast<int>(eigen_vecs[0].y * eigen_val[0]));
+    cv::Point p2 = cntr - 0.02 * cv::Point(static_cast<int>(eigen_vecs[1].x * eigen_val[1]), static_cast<int>(eigen_vecs[1].y * eigen_val[1]));
+    
+    drawAxis(img, cntr, p1, cv::Scalar(0, 255, 0), 5);
+    drawAxis(img, cntr, p2, cv::Scalar(255, 255, 0), 10);
+    double angle = atan2(eigen_vecs[0].y, eigen_vecs[0].x); // orientation in radians
+    return angle;
+}
 
 // Function to interpolate between two slices
 void interpolateSlices(const cv::Mat& slice1, const cv::Mat& slice2, 
@@ -54,45 +118,6 @@ std::vector<std::pair<float, cv::Vec3f>> performPCA(const std::vector<cv::Point3
         );
         eigenPairs.emplace_back(eigenvalue, eigenvector);
     }
-
-    return eigenPairs;
-}
-
-std::vector<std::pair<float, cv::Vec3f>> performPCAAlongAxes(const std::vector<cv::Point3f>& points) {
-    if (points.empty()) {
-        throw std::invalid_argument("No points provided for PCA.");
-    }
-
-    // Create matrices for each axis (x, y, z)
-    cv::Mat dataX(points.size(), 1, CV_32F);
-    cv::Mat dataY(points.size(), 1, CV_32F);
-    cv::Mat dataZ(points.size(), 1, CV_32F);
-
-    for (size_t i = 0; i < points.size(); ++i) {
-        dataX.at<float>(i, 0) = points[i].x;
-        dataY.at<float>(i, 0) = points[i].y;
-        dataZ.at<float>(i, 0) = points[i].z;
-    }
-
-    // Perform PCA for each axis
-    cv::PCA pcaX(dataX, cv::Mat(), cv::PCA::DATA_AS_ROW);
-    cv::PCA pcaY(dataY, cv::Mat(), cv::PCA::DATA_AS_ROW);
-    cv::PCA pcaZ(dataZ, cv::Mat(), cv::PCA::DATA_AS_ROW);
-
-    // Extract eigenvalues and eigenvectors for each axis
-    float eigenvalueX = pcaX.eigenvalues.at<float>(0);
-    float eigenvalueY = pcaY.eigenvalues.at<float>(0);
-    float eigenvalueZ = pcaZ.eigenvalues.at<float>(0);
-
-    cv::Vec3f eigenvectorX(pcaX.eigenvectors.at<float>(0, 0), 0, 0);
-    cv::Vec3f eigenvectorY(0, pcaY.eigenvectors.at<float>(0, 0), 0);
-    cv::Vec3f eigenvectorZ(0, 0, pcaZ.eigenvectors.at<float>(0, 0));
-
-    // Prepare the result
-    std::vector<std::pair<float, cv::Vec3f>> eigenPairs;
-    eigenPairs.emplace_back(eigenvalueX, eigenvectorX);
-    eigenPairs.emplace_back(eigenvalueY, eigenvectorY);
-    eigenPairs.emplace_back(eigenvalueZ, eigenvectorZ);
 
     return eigenPairs;
 }
